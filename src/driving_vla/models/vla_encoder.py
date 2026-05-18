@@ -5,10 +5,10 @@ from torch import nn
 
 
 class DrivingVLAEncoder(nn.Module):
-    """Minimal VLA-style condition encoder.
+    """最小化的 VLA 风格条件编码器。
 
-    For MVP, visual/BEV features are represented by a compact state vector.
-    Future versions can replace `state` with BEV tokens or multi-view features.
+    在 MVP 中，视觉/BEV 特征由紧凑的状态向量表示。
+    后续版本可以将 `state` 替换为 BEV token 或多视角特征。
     """
 
     def __init__(self, state_dim: int, num_commands: int, text_embed_dim: int, latent_dim: int):

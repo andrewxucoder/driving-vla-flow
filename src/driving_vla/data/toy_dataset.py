@@ -19,10 +19,10 @@ class ToyDrivingConfig:
 
 
 class ToyDrivingDataset(Dataset):
-    """Synthetic driving trajectories conditioned on ego state and language command.
+    """根据自车状态和语言指令生成的合成驾驶轨迹数据集。
 
-    This dataset is intentionally simple. It is used to validate the algorithmic
-    pipeline before moving to nuPlan/nuScenes/CARLA adapters.
+    这个数据集刻意保持简单，用于在接入 nuPlan/nuScenes/CARLA
+    适配器之前验证算法流程。
     """
 
     def __init__(self, cfg: ToyDrivingConfig, seed: int = 42):
@@ -51,13 +51,13 @@ class ToyDrivingDataset(Dataset):
         x = speed * t
         y = np.zeros_like(x)
 
-        if cmd_id == 1:  # left lane change
+        if cmd_id == 1:  # 向左变道
             y = 3.5 / (1.0 + np.exp(-3 * (t - 1.5)))
-        elif cmd_id == 2:  # right lane change
+        elif cmd_id == 2:  # 向右变道
             y = -3.5 / (1.0 + np.exp(-3 * (t - 1.5)))
-        elif cmd_id == 3:  # yield / slow down
+        elif cmd_id == 3:  # 让行或减速
             x = speed * (1 - np.exp(-0.9 * t)) / 0.9
-        else:  # keep lane with slight curvature
+        else:  # 保持车道并带有轻微曲率
             y = curvature * x**2
 
         traj = np.stack([x, y], axis=-1)

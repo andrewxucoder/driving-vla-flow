@@ -14,7 +14,7 @@ class TimeEmbedding(nn.Module):
 
 
 class ConditionalFlowMatcher(nn.Module):
-    """Conditional vector-field model for trajectory Flow Matching."""
+    """用于轨迹 Flow Matching 的条件向量场模型。"""
 
     def __init__(self, horizon: int, traj_dim: int, cond_dim: int, hidden_dim: int):
         super().__init__()
@@ -38,7 +38,7 @@ class ConditionalFlowMatcher(nn.Module):
 
 
 def flow_matching_loss(model: ConditionalFlowMatcher, x1: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
-    """Rectified-flow style objective with linear interpolation x_t=(1-t)x0+t*x1."""
+    """Rectified Flow 风格目标函数，使用线性插值 x_t=(1-t)x0+t*x1。"""
     x0 = torch.randn_like(x1)
     b = x1.shape[0]
     t = torch.rand(b, device=x1.device)

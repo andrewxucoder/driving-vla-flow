@@ -1,6 +1,6 @@
 seed: 42
 run_name: toy_flow_mvp
-output_dir: outputs/toy_flow
+output_dir: outputs
 
 data:
   num_samples: 4096

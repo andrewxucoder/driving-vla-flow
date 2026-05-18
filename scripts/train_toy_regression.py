@@ -16,7 +16,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from driving_vla.data.toy_dataset import ToyDrivingConfig, ToyDrivingDataset
 from driving_vla.evaluation.metrics import ade, fde, jerk_proxy
-from driving_vla.models.flow_matching import ConditionalFlowMatcher, flow_matching_loss, sample_flow
+from driving_vla.models.regression_head import WaypointRegressionHead
 from driving_vla.models.vla_encoder import DrivingVLAEncoder
 
 
@@ -56,7 +56,7 @@ def main() -> None:
         text_embed_dim=cfg["model"]["text_embed_dim"],
         latent_dim=cfg["model"]["latent_dim"],
     ).to(device)
-    flow = ConditionalFlowMatcher(
+    regression = WaypointRegressionHead(
         horizon=data_section["horizon"],
         traj_dim=2,
         cond_dim=cfg["model"]["latent_dim"],
@@ -64,30 +64,31 @@ def main() -> None:
     ).to(device)
 
     opt = torch.optim.AdamW(
-        list(encoder.parameters()) + list(flow.parameters()),
+        list(encoder.parameters()) + list(regression.parameters()),
         lr=cfg["training"]["lr"],
         weight_decay=cfg["training"].get("weight_decay", 0.0),
     )
 
-    out_dir = Path(cfg["output_dir"]) / "flow"
+    out_dir = Path(cfg["output_dir"]) / "regression"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(cfg["training"]["epochs"]):
-        encoder.train(); flow.train()
+        encoder.train(); regression.train()
         losses = []
         for batch in tqdm(train_loader, desc=f"第 {epoch+1} 轮"):
             state = batch["state"].to(device)
             cmd_id = batch["cmd_id"].to(device)
             traj = batch["trajectory"].to(device)
             cond = encoder(state, cmd_id)
-            loss = flow_matching_loss(flow, traj, cond)
+            pred = regression(cond)
+            loss = torch.mean((pred - traj) ** 2)
             opt.zero_grad(set_to_none=True)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(list(encoder.parameters()) + list(flow.parameters()), 1.0)
+            torch.nn.utils.clip_grad_norm_(list(encoder.parameters()) + list(regression.parameters()), 1.0)
             opt.step()
             losses.append(float(loss.detach().cpu()))
 
-        encoder.eval(); flow.eval()
+        encoder.eval(); regression.eval()
         val_ade, val_fde, val_jerk = [], [], []
         with torch.no_grad():
             for batch in val_loader:
@@ -95,7 +96,7 @@ def main() -> None:
                 cmd_id = batch["cmd_id"].to(device)
                 traj = batch["trajectory"].to(device)
                 cond = encoder(state, cmd_id)
-                pred = sample_flow(flow, cond, steps=cfg["model"]["flow_steps"])
+                pred = regression(cond)
                 val_ade.append(float(ade(pred, traj).cpu()))
                 val_fde.append(float(fde(pred, traj).cpu()))
                 val_jerk.append(float(jerk_proxy(pred).cpu()))
@@ -107,8 +108,8 @@ def main() -> None:
             "验证_jerk代理": round(float(np.mean(val_jerk)), 4),
         })
 
-    torch.save({"encoder": encoder.state_dict(), "flow": flow.state_dict(), "cfg": cfg}, out_dir / "model.pt")
-    print(f"模型已保存到 {out_dir / 'model.pt'}")
+    torch.save({"encoder": encoder.state_dict(), "regression": regression.state_dict(), "cfg": cfg}, out_dir / "model.pt")
+    print(f"回归基线模型已保存到 {out_dir / 'model.pt'}")
 
 
 if __name__ == "__main__":
