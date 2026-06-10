@@ -1,86 +1,99 @@
+"""Canonical sample schema for v2.
+
+Per user decision R2 (2026-05-27):
+- Field naming is hybrid: `history` / `future` keep the driving-industry term
+  (nuPlan / NAVSIM papers use these directly), while `instruction` is renamed
+  from v1's `language_command` to align with robot-vla-flow.
+- This is the *only* sample-level schema. All data adapters output this. All
+  policy heads consume this.
+
+M2 extension: `command_id` is added as an optional top-level int field. It is
+the discrete high-level driving command (see `command_labeling.COMMAND_VOCAB`)
+and is the primary conditioning signal for non-VLM heads. `instruction` is the
+natural-language paraphrase derived from `command_id` for the VLM pathway.
+
+M7 extension: `route` is added as an optional `[N, 2]` ego-frame polyline of
+look-ahead waypoints (the global plan ahead of the ego, beyond the immediate
+`future` horizon). Encodes long-range navigation intent — necessary for the
+policy to anticipate turns / merges that lie further than the prediction
+window.
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
-import numpy as np
 import torch
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-@dataclass
-class DrivingTrajectorySample:
-    """真实驾驶数据集和 toy 数据集共用的轨迹样本结构。"""
+class DrivingTrajectorySample(BaseModel):
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        extra="forbid",
+        frozen=False,
+    )
 
-    ego_state: torch.Tensor | np.ndarray | list[float]
-    history: torch.Tensor | np.ndarray | list[list[float]] | None
-    future: torch.Tensor | np.ndarray | list[list[float]]
-    command_id: torch.Tensor | int
-    language_command: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
+    history: torch.Tensor = Field(
+        ...,
+        description="Past ego states, shape [T_hist, D_state]",
+    )
+    future: torch.Tensor = Field(
+        ...,
+        description="Target future trajectory, shape [T_fut, D_action]",
+    )
+    instruction: str | None = Field(
+        default=None,
+        description="Natural-language driving command (e.g., 'change to the left lane').",
+    )
+    command_id: int | None = Field(
+        default=None,
+        description="Discrete high-level driving command id (index into COMMAND_VOCAB). Primary condition for non-VLM heads.",
+    )
+    ego_state: torch.Tensor | None = Field(
+        default=None,
+        description="Current ego state vector, shape [D_state]. Optional convenience separate from history.",
+    )
+    images: torch.Tensor | None = Field(
+        default=None,
+        description="Multi-view camera images, shape [V, C, H, W]. None if running state-only.",
+    )
+    route: torch.Tensor | None = Field(
+        default=None,
+        description=(
+            "Ego-frame route polyline ahead of the ego, shape [N, 2]. "
+            "Captures beyond-horizon navigation intent. None if no route is available."
+        ),
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Scenario id, token, timestamp — free-form, not consumed by model heads.",
+    )
 
+    @field_validator("history", "future")
+    @classmethod
+    def _require_2d(cls, v: torch.Tensor) -> torch.Tensor:
+        if v.ndim != 2:
+            raise ValueError(f"expected 2D tensor [T, D], got shape {tuple(v.shape)}")
+        return v
 
-def _to_float_tensor(value: Any) -> torch.Tensor:
-    if isinstance(value, torch.Tensor):
-        return value.detach().clone().to(dtype=torch.float32)
-    return torch.tensor(value, dtype=torch.float32)
+    @field_validator("ego_state")
+    @classmethod
+    def _require_1d_state(cls, v: torch.Tensor | None) -> torch.Tensor | None:
+        if v is not None and v.ndim != 1:
+            raise ValueError(f"ego_state must be 1D [D], got shape {tuple(v.shape)}")
+        return v
 
+    @field_validator("images")
+    @classmethod
+    def _require_4d_images(cls, v: torch.Tensor | None) -> torch.Tensor | None:
+        if v is not None and v.ndim != 4:
+            raise ValueError(f"images must be 4D [V, C, H, W], got shape {tuple(v.shape)}")
+        return v
 
-def _to_long_tensor(value: Any) -> torch.Tensor:
-    if isinstance(value, torch.Tensor):
-        return value.detach().clone().to(dtype=torch.long)
-    return torch.tensor(value, dtype=torch.long)
-
-
-def trajectory_sample_to_tensors(sample: DrivingTrajectorySample | Mapping[str, Any]) -> dict[str, Any]:
-    """将统一轨迹样本或旧版 toy 样本字典转换为张量字典。
-
-    兼容旧版 toy 输出：
-    - `state` 会映射到 `ego_state`
-    - `trajectory` 会映射到 `future`
-    - `cmd_id` 会映射到 `command_id`
-
-    返回结果同时保留旧版别名，方便现有训练脚本继续使用。
-    """
-    if isinstance(sample, DrivingTrajectorySample):
-        raw = {
-            "ego_state": sample.ego_state,
-            "history": sample.history,
-            "future": sample.future,
-            "command_id": sample.command_id,
-            "language_command": sample.language_command,
-            "metadata": sample.metadata,
-        }
-    else:
-        raw = dict(sample)
-
-    ego_state = raw.get("ego_state", raw.get("state"))
-    future = raw.get("future", raw.get("trajectory"))
-    command_id = raw.get("command_id", raw.get("cmd_id"))
-    if ego_state is None:
-        raise KeyError("样本缺少 `ego_state` 或兼容字段 `state`")
-    if future is None:
-        raise KeyError("样本缺少 `future` 或兼容字段 `trajectory`")
-    if command_id is None:
-        raise KeyError("样本缺少 `command_id` 或兼容字段 `cmd_id`")
-
-    history = raw.get("history")
-    language_command = raw.get("language_command", "")
-    metadata = raw.get("metadata") or {}
-
-    tensor_dict: dict[str, Any] = {
-        "ego_state": _to_float_tensor(ego_state),
-        "history": None if history is None else _to_float_tensor(history),
-        "future": _to_float_tensor(future),
-        "command_id": _to_long_tensor(command_id),
-        "language_command": language_command,
-        "metadata": dict(metadata),
-    }
-    tensor_dict["state"] = tensor_dict["ego_state"]
-    tensor_dict["trajectory"] = tensor_dict["future"]
-    tensor_dict["cmd_id"] = tensor_dict["command_id"]
-    return tensor_dict
-
-
-def sample_dict_to_tensors(sample: DrivingTrajectorySample | Mapping[str, Any]) -> dict[str, Any]:
-    """`trajectory_sample_to_tensors` 的兼容别名。"""
-    return trajectory_sample_to_tensors(sample)
+    @field_validator("route")
+    @classmethod
+    def _require_2d_route(cls, v: torch.Tensor | None) -> torch.Tensor | None:
+        if v is not None and (v.ndim != 2 or v.shape[-1] != 2):
+            raise ValueError(f"route must be 2D [N, 2], got shape {tuple(v.shape)}")
+        return v

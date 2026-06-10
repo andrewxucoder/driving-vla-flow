@@ -1,61 +1,95 @@
+"""Conditional flow-matching trajectory head.
+
+Rectified-flow style: train a vector field ``v_θ(x_t, t, cond)`` to predict
+``x_1 - x_0`` where ``x_t = (1-t) x_0 + t x_1``, ``x_0 ~ N(0, I)``, and
+``x_1`` is the expert trajectory chunk. At inference time, integrate the ODE
+``dx/dt = v_θ`` from ``t=0`` (Gaussian noise) to ``t=1`` (sampled trajectory)
+with Euler steps.
+"""
+
 from __future__ import annotations
 
 import torch
-from torch import nn
+
+from driving_vla.models.trajectory_denoiser import TrajectoryDenoiser
 
 
-class TimeEmbedding(nn.Module):
-    def __init__(self, dim: int):
-        super().__init__()
-        self.net = nn.Sequential(nn.Linear(1, dim), nn.SiLU(), nn.Linear(dim, dim))
+class ConditionalFlowMatcher(TrajectoryDenoiser):
+    """Rectified-flow trajectory head.
 
-    def forward(self, t: torch.Tensor) -> torch.Tensor:
-        return self.net(t.view(-1, 1))
-
-
-class ConditionalFlowMatcher(nn.Module):
-    """用于轨迹 Flow Matching 的条件向量场模型。"""
-
-    def __init__(self, horizon: int, traj_dim: int, cond_dim: int, hidden_dim: int):
-        super().__init__()
-        self.horizon = horizon
-        self.traj_dim = traj_dim
-        flat_dim = horizon * traj_dim
-        self.time = TimeEmbedding(hidden_dim)
-        self.net = nn.Sequential(
-            nn.Linear(flat_dim + cond_dim + hidden_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, flat_dim),
-        )
-
-    def forward(self, x_t: torch.Tensor, t: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
-        b = x_t.shape[0]
-        h = self.time(t)
-        inp = torch.cat([x_t.reshape(b, -1), cond, h], dim=-1)
-        return self.net(inp).reshape(b, self.horizon, self.traj_dim)
+    Inherits the shared (x_t, t, cond) → trajectory_tensor backbone; the class
+    exists as a distinct symbol so ``isinstance(head, ConditionalFlowMatcher)``
+    can dispatch on policy type.
+    """
 
 
-def flow_matching_loss(model: ConditionalFlowMatcher, x1: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
-    """Rectified Flow 风格目标函数，使用线性插值 x_t=(1-t)x0+t*x1。"""
+def flow_matching_loss(
+    model: ConditionalFlowMatcher,
+    x1: torch.Tensor,
+    cond: torch.Tensor,
+) -> torch.Tensor:
+    """Rectified-flow training objective.
+
+    ``x1``: expert trajectory ``[B, H, D]``. ``cond``: encoded condition ``[B, L]``.
+    """
+    if x1.ndim != 3:
+        raise ValueError(f"x1 expected [B, H, D], got {tuple(x1.shape)}")
+    batch = x1.shape[0]
     x0 = torch.randn_like(x1)
-    b = x1.shape[0]
-    t = torch.rand(b, device=x1.device)
-    view_t = t.view(b, 1, 1)
-    x_t = (1.0 - view_t) * x0 + view_t * x1
+    t = torch.rand(batch, device=x1.device)
+    t_view = t.view(batch, 1, 1)
+    x_t = (1.0 - t_view) * x0 + t_view * x1
     target_v = x1 - x0
     pred_v = model(x_t, t, cond)
     return torch.mean((pred_v - target_v) ** 2)
 
 
 @torch.no_grad()
-def sample_flow(model: ConditionalFlowMatcher, cond: torch.Tensor, steps: int = 16) -> torch.Tensor:
-    b = cond.shape[0]
-    x = torch.randn(b, model.horizon, model.traj_dim, device=cond.device)
+def sample_flow(
+    model: ConditionalFlowMatcher,
+    cond: torch.Tensor,
+    steps: int = 32,
+) -> torch.Tensor:
+    """Integrate the ODE ``dx/dt = v_θ(x, t, cond)`` from t=0 to t=1.
+
+    Returns ``[B, H, D]`` sampled trajectories.
+    """
+    if steps <= 0:
+        raise ValueError(f"steps must be > 0, got {steps}")
+    batch = cond.shape[0]
+    device = cond.device
+    x = torch.randn(batch, model.horizon, model.traj_dim, device=device)
     dt = 1.0 / steps
     for i in range(steps):
-        t = torch.full((b,), i / steps, device=cond.device)
+        t = torch.full((batch,), (i + 0.5) * dt, device=device)
         v = model(x, t, cond)
         x = x + dt * v
     return x
+
+
+@torch.no_grad()
+def sample_flow_n(
+    model: ConditionalFlowMatcher,
+    cond: torch.Tensor,
+    n: int,
+    steps: int = 32,
+) -> torch.Tensor:
+    """Independent N-sample sampler for Best-of-N.
+
+    ``cond``: ``[B, L]``. Returns ``[B, N, H, D]`` with each (b, n) drawn from a
+    separate Gaussian seed (no broadcasting tricks).
+    """
+    if n <= 0:
+        raise ValueError(f"n must be > 0, got {n}")
+    batch = cond.shape[0]
+    cond_exp = cond.unsqueeze(1).expand(-1, n, -1).reshape(batch * n, -1)
+    flat = sample_flow(model, cond_exp, steps=steps)  # [B*N, H, D]
+    return flat.reshape(batch, n, model.horizon, model.traj_dim)
+
+
+__all__ = [
+    "ConditionalFlowMatcher",
+    "flow_matching_loss",
+    "sample_flow",
+    "sample_flow_n",
+]

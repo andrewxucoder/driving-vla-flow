@@ -1,58 +1,44 @@
+"""Global-to-ego-frame 2D coordinate transforms.
+
+Used by NAVSIM / nuPlan adapters to express past + future poses in the ego's
+current heading frame, which is the convention every policy head expects.
+"""
+
 from __future__ import annotations
 
 import numpy as np
 
 
-def _pose_components(ego_pose: np.ndarray, points_ndim: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    if ego_pose.shape[-1] != 3:
-        raise ValueError("ego_pose 的最后一维必须是 [x, y, heading]")
+def global_to_ego_frame(
+    points_xy: np.ndarray,
+    ego_pose: np.ndarray,
+) -> np.ndarray:
+    """Rotate-and-translate global-frame XY points into the ego frame.
 
-    if ego_pose.ndim == 1:
-        return ego_pose[0], ego_pose[1], ego_pose[2]
+    Args:
+        points_xy: shape [N, 2], world-frame xy in metres.
+        ego_pose: shape [3], [ego_x, ego_y, ego_heading_rad]. Heading is the
+            angle of the ego's forward axis relative to world +x.
 
-    extra_dims = max(points_ndim - ego_pose.ndim, 0)
-    view_shape = ego_pose.shape[:-1] + (1,) * extra_dims
-    return (
-        ego_pose[..., 0].reshape(view_shape),
-        ego_pose[..., 1].reshape(view_shape),
-        ego_pose[..., 2].reshape(view_shape),
-    )
-
-
-def global_to_ego_frame(points: np.ndarray, ego_pose: np.ndarray) -> np.ndarray:
-    """将全局坐标点转换到 ego 坐标系。
-
-    `points` 的最后一维为 `[x, y]`，`ego_pose` 的最后一维为
-    `[x, y, heading]`。支持形如 `[N, 2]`、`[B, N, 2]`
-    的点集，以及 `[3]`、`[B, 3]` 的 ego 位姿。
+    Returns:
+        shape [N, 2], with x = forward distance, y = leftward distance
+        relative to the ego at its current pose.
     """
-    points_arr = np.asarray(points, dtype=np.float64)
-    ego_pose_arr = np.asarray(ego_pose, dtype=np.float64)
-    if points_arr.shape[-1] != 2:
-        raise ValueError("points 的最后一维必须是 [x, y]")
+    if points_xy.ndim != 2 or points_xy.shape[-1] != 2:
+        raise ValueError(f"points_xy must be [N, 2], got {tuple(points_xy.shape)}")
+    if ego_pose.shape != (3,):
+        raise ValueError(f"ego_pose must be [3], got {tuple(ego_pose.shape)}")
 
-    ego_x, ego_y, heading = _pose_components(ego_pose_arr, points_arr.ndim)
-    dx = points_arr[..., 0] - ego_x
-    dy = points_arr[..., 1] - ego_y
-    cos_h = np.cos(heading)
-    sin_h = np.sin(heading)
-    ego_points = np.empty_like(points_arr, dtype=np.float64)
-    ego_points[..., 0] = cos_h * dx + sin_h * dy
-    ego_points[..., 1] = -sin_h * dx + cos_h * dy
-    return ego_points
+    cos_h = float(np.cos(ego_pose[2]))
+    sin_h = float(np.sin(ego_pose[2]))
+
+    dx = points_xy[:, 0] - float(ego_pose[0])
+    dy = points_xy[:, 1] - float(ego_pose[1])
+
+    ego_x = cos_h * dx + sin_h * dy
+    ego_y = -sin_h * dx + cos_h * dy
+
+    return np.stack([ego_x, ego_y], axis=-1)
 
 
-def ego_to_global_frame(points: np.ndarray, ego_pose: np.ndarray) -> np.ndarray:
-    """将 ego 坐标系点转换回全局坐标。"""
-    points_arr = np.asarray(points, dtype=np.float64)
-    ego_pose_arr = np.asarray(ego_pose, dtype=np.float64)
-    if points_arr.shape[-1] != 2:
-        raise ValueError("points 的最后一维必须是 [x, y]")
-
-    ego_x, ego_y, heading = _pose_components(ego_pose_arr, points_arr.ndim)
-    cos_h = np.cos(heading)
-    sin_h = np.sin(heading)
-    global_points = np.empty_like(points_arr, dtype=np.float64)
-    global_points[..., 0] = cos_h * points_arr[..., 0] - sin_h * points_arr[..., 1] + ego_x
-    global_points[..., 1] = sin_h * points_arr[..., 0] + cos_h * points_arr[..., 1] + ego_y
-    return global_points
+__all__ = ["global_to_ego_frame"]
