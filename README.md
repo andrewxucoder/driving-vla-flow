@@ -1,6 +1,6 @@
 # driving-vla-flow
 
-> 面向**驾驶轨迹规划**的分层 VLA(Vision-Language-Action)**研究框架**:低频语言 / VLM 产生**结构化约束**,高频 Flow / Diffusion policy 生成候选轨迹,再经 `reward · Best-of-N · Flow-DPO` 完成**约束下的轨迹选择与策略优化**。三仓 Physical Intelligence 生态中的**驾驶域**(与 [robot-vla-flow](../robot-vla-flow/) 机器人操作域平级,共享 [embodied-world-model](../embodied-world-model/) 枢纽)。
+> 面向**驾驶轨迹规划**的分层 VLA(Vision-Language-Action)**研究框架**:低频语言 / VLM 产生**结构化约束**,高频 Flow / Diffusion policy 生成候选轨迹,再经 `reward · Best-of-N · Flow-DPO` 完成**约束下的轨迹选择与策略优化**。三仓 Physical Intelligence 生态中的**驾驶域**(与 robot-vla-flow 机器人操作域平级,共享 embodied-world-model 枢纽)。
 
 **系统级主线**:生成式策略「提议」、外部验证器「把关」——本仓让 **VLM / 几何约束**充当轨迹的外部验证器(出约束、不出轨迹);跨仓再由 world model 作统一**评价器 / 偏好信号源**,把「生成 + 验证」闭环回流到 driving 与 robot 两域。
 
@@ -8,7 +8,7 @@
 
 **是**:**把 VLM 当「出约束的」而非「出轨迹的」的分层 driving 研究框架**——让你快速搭起并对比 driving planning 想法:三类轨迹生成策略、语言/VLM 约束建模、候选轨迹 Best-of-N 选择、偏好 / DPO 优化,以及与共享 world model 的闭环对接,全部用统一 schema 与 policy 接口串起来。整套在一台 M4 Pro 笔记本上分钟级可跑通。
 
-**不是**:① 不是完整自动驾驶系统(不覆盖感知 / 预测 / 规控全栈);② 不是端到端「VLM 直接输出轨迹」——走双频分层 VLA(VLM 出约束、policy 出轨迹),理由见 [§ 方法框架](#方法框架)。
+**不是**:① 不是完整自动驾驶系统(不覆盖感知 / 预测 / 规控全栈);② 不是端到端「VLM 直接输出轨迹」——走双频分层 VLA(VLM 出约束、policy 出轨迹),理由见 § 方法框架。
 
 ## 这套系统能做什么(能力 × 可开展的实验 × 验证状态)
 
@@ -86,8 +86,8 @@ python scripts/eval_nuplan_heads.py --data-path data/nuplan/val.pt \
 | repo                                             | 角色         | 关注                                                             |
 | ------------------------------------------------ | ---------- | -------------------------------------------------------------- |
 | **driving-vla-flow**(本仓)                         | 驾驶域 VLA 规划 | trajectory flow/diffusion · VLM-as-constraint · BoN · Flow-DPO |
-| [robot-vla-flow](../robot-vla-flow/)             | 机器人操作域 VLA | manipulation policy · learned RM · DPO · 闭环 rollout            |
-| [embodied-world-model](../embodied-world-model/) | **共享枢纽**   | 跨域 latent world model · 闭环 simulator · WM-based 偏好信号源          |
+| [robot-vla-flow](https://github.com/andrewxucoder/robot-vla-flow)             | 机器人操作域 VLA | manipulation policy · learned RM · DPO · 闭环 rollout            |
+| [embodied-world-model](https://github.com/andrewxucoder/embodied-world-model/tree/dev) | **共享枢纽**   | 跨域 latent world model · 闭环 simulator · WM-based 偏好信号源          |
 
 
 ## 结果边界(读数前必读)
